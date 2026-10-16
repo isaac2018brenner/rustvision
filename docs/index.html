@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rustvision · draw a digit</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect width=%2716%27 height=%2716%27 rx=%273%27 fill=%27%232a78d6%27/%3E%3Cpath d=%27M5 4h6l-4 8%27 stroke=%27white%27 stroke-width=%272%27 fill=%27none%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<meta name="description" content="A convolutional neural network written from scratch in Rust, running in your browser via WebAssembly.">
+<style>
+  :root {
+    --bg: #fcfcfb;
+    --surface: #ffffff;
+    --border: #e4e3df;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --ink-3: #8a8983;
+    --accent: #2a78d6;
+    --accent-ink: #ffffff;
+    --bar: #d6d5d0;
+    --pos: #eb6834;
+    --neg: #2a78d6;
+    --pad-bg: #111110;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141413;
+      --surface: #1c1c1b;
+      --border: #33332f;
+      --ink: #f0efec;
+      --ink-2: #c3c2b7;
+      --ink-3: #8f8e86;
+      --accent: #3987e5;
+      --bar: #46453f;
+      --pos: #d95926;
+      --neg: #3987e5;
+      --pad-bg: #000000;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141413; --surface: #1c1c1b; --border: #33332f; --ink: #f0efec; --ink-2: #c3c2b7;
+    --ink-3: #8f8e86; --accent: #3987e5; --bar: #46453f; --pos: #d95926; --neg: #3987e5; --pad-bg: #000000;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 980px; margin: 0 auto; padding: 32px 16px 48px; }
+  header h1 { margin: 0; font-size: 28px; letter-spacing: -0.01em; }
+  header p { margin: 6px 0 0; color: var(--ink-2); max-width: 640px; }
+  header a { color: var(--accent); }
+  .grid { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 20px; margin-top: 24px; }
+  @media (max-width: 720px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+  .card h2 { margin: 0 0 4px; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); }
+  .card .hint { margin: 0 0 12px; font-size: 13px; color: var(--ink-3); }
+  #pad {
+    display: block; width: 100%; aspect-ratio: 1; border-radius: 8px; background: var(--pad-bg);
+    touch-action: none; cursor: crosshair;
+  }
+  .row { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+  button {
+    font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface); color: var(--ink);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .status { font-size: 13px; color: var(--ink-3); margin-left: auto; }
+  .verdict { display: flex; align-items: baseline; gap: 14px; min-height: 76px; }
+  .verdict .digit { font-size: 64px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .verdict .conf { color: var(--ink-2); }
+  .bars { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 6px; align-items: end; height: 200px; margin-top: 12px; }
+  .bar { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; position: relative; }
+  .bar .fill { width: 100%; max-width: 28px; background: var(--bar); border-radius: 4px 4px 0 0; min-height: 2px; transition: height 0.12s ease-out; }
+  .bar.top .fill { background: var(--accent); }
+  .bar .pct { font-size: 11px; color: var(--ink-2); height: 16px; font-variant-numeric: tabular-nums; }
+  .bar .lbl { font-size: 13px; color: var(--ink-2); margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .bar.top .lbl { color: var(--ink); font-weight: 600; }
+  .views { display: grid; grid-template-columns: repeat(2, minmax(0, 260px)); gap: 24px; margin-top: 20px; }
+  @media (max-width: 520px) { .views { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; } }
+  .view canvas { width: 100%; aspect-ratio: 1; image-rendering: pixelated; border-radius: 6px; background: var(--pad-bg); display: block; }
+  .view h3 { margin: 0 0 2px; font-size: 14px; }
+  .view p { margin: 0 0 8px; font-size: 12px; color: var(--ink-3); }
+  .legend { display: flex; gap: 12px; font-size: 12px; color: var(--ink-2); margin-top: 6px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+  .maps { margin-top: 20px; }
+  .maps-grid { display: grid; gap: 4px; margin-top: 8px; }
+  .maps-grid canvas { width: 100%; aspect-ratio: 1; image-rendering: pixelated; border-radius: 3px; display: block; background: var(--pad-bg); }
+  #maps1 { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  #maps2 { grid-template-columns: repeat(16, minmax(0, 1fr)); }
+  @media (max-width: 520px) { #maps2 { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
+  footer { margin-top: 28px; font-size: 13px; color: var(--ink-3); }
+  footer a { color: var(--ink-2); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>rustvision</h1>
+    <p>A convolutional neural network written from scratch in Rust (no ML libraries, hand-written backpropagation), compiled to WebAssembly and running entirely in your browser. Draw a digit from 0 to 9.</p>
+  </header>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Draw here</h2>
+      <p class="hint">Use your mouse or finger. One digit, big and centred works best.</p>
+      <canvas id="pad" width="280" height="280" aria-label="Drawing area"></canvas>
+      <div class="row">
+        <button id="clear" class="primary">Clear</button>
+        <span class="status" id="status">Loading model…</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Prediction</h2>
+      <div class="verdict" aria-live="polite">
+        <span class="digit" id="digit">–</span>
+        <span class="conf" id="conf">Draw a digit to begin.</span>
+      </div>
+      <div class="bars" id="bars" role="img" aria-label="Probability for each digit"></div>
+    </section>
+  </div>
+
+  <section class="card" style="margin-top: 20px;">
+    <h2>What the network sees</h2>
+    <p class="hint">Every number below comes out of the same Rust code that trained the model.</p>
+    <div class="views">
+      <div class="view">
+        <h3>Network input</h3>
+        <p>Your drawing, cropped, shrunk to 28×28 and centred like the MNIST training images.</p>
+        <canvas id="input" width="28" height="28"></canvas>
+      </div>
+      <div class="view">
+        <h3>Saliency</h3>
+        <p>Which pixels drive the winning score: its gradient with respect to the input, averaged over noisy copies (SmoothGrad).</p>
+        <canvas id="saliency" width="28" height="28"></canvas>
+        <div class="legend">
+          <span><i style="background: var(--pos)"></i>more ink here raises the score</span>
+          <span><i style="background: var(--neg)"></i>more ink here lowers it</span>
+        </div>
+      </div>
+    </div>
+    <div class="maps">
+      <h3 style="margin: 0; font-size: 14px;">Layer 1: 16 feature maps (28×28)</h3>
+      <p style="margin: 2px 0 0; font-size: 12px; color: var(--ink-3);">Each 5×5 filter responds to simple patterns: edges at different angles, stroke ends, thick or thin lines.</p>
+      <div class="maps-grid" id="maps1"></div>
+    </div>
+    <div class="maps">
+      <h3 style="margin: 0; font-size: 14px;">Layer 2: 32 feature maps (14×14)</h3>
+      <p style="margin: 2px 0 0; font-size: 12px; color: var(--ink-3);">Combinations of layer-1 patterns: curves, corners and loops, at half the resolution.</p>
+      <div class="maps-grid" id="maps2"></div>
+    </div>
+  </section>
+
+  <footer>
+    Trained on the 60,000 MNIST digits with random rotations, shifts and stroke changes. ·
+    <a href="https://github.com/isaac2018brenner/rustvision">Source code on GitHub</a>
+  </footer>
+</main>
+
+<script>
+(async () => {
+  const $ = (id) => document.getElementById(id);
+  const status = $("status");
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+
+  // ---- WebAssembly + model ----
+  let wasm;
+  try {
+    const [module, model] = await Promise.all([
+      WebAssembly.instantiateStreaming
+        ? WebAssembly.instantiateStreaming(fetch("rustvision.wasm"), {}).catch(async () =>
+            WebAssembly.instantiate(await (await fetch("rustvision.wasm")).arrayBuffer(), {}))
+        : WebAssembly.instantiate(await (await fetch("rustvision.wasm")).arrayBuffer(), {}),
+      fetch("model.bin").then((r) => { if (!r.ok) throw new Error("model.bin " + r.status); return r.arrayBuffer(); }),
+    ]);
+    wasm = module.instance.exports;
+    const bytes = new Uint8Array(model);
+    const p = wasm.alloc(bytes.length);
+    new Uint8Array(wasm.memory.buffer, p, bytes.length).set(bytes);
+    if (!wasm.load_model(p, bytes.length)) throw new Error("model rejected");
+    status.textContent = `Model loaded · ${(bytes.length / 1024).toFixed(0)} KB`;
+  } catch (e) {
+    status.textContent = "Could not load the model: " + e.message;
+    return;
+  }
+  const view = (ptr, n) => new Float32Array(wasm.memory.buffer, ptr, n);
+
+  // ---- Probability bars ----
+  const bars = [];
+  for (let d = 0; d < 10; d++) {
+    const el = document.createElement("div");
+    el.className = "bar";
+    el.innerHTML = `<span class="pct"></span><div class="fill" style="height:0%"></div><span class="lbl">${d}</span>`;
+    $("bars").appendChild(el);
+    bars.push(el);
+  }
+
+  // ---- Feature map canvases ----
+  const makeMaps = (id, count, side) =>
+    Array.from({ length: count }, () => {
+      const c = document.createElement("canvas");
+      c.width = c.height = side;
+      $(id).appendChild(c);
+      return c;
+    });
+  const maps1 = makeMaps("maps1", 16, 28);
+  const maps2 = makeMaps("maps2", 32, 14);
+
+  // ---- Drawing ----
+  const pad = $("pad");
+  const pctx = pad.getContext("2d", { willReadFrequently: true });
+  const clearPad = () => { pctx.fillStyle = "#000"; pctx.fillRect(0, 0, 280, 280); };
+  clearPad();
+  let drawing = false, last = null, pending = false;
+  const pos = (e) => {
+    const r = pad.getBoundingClientRect();
+    return [((e.clientX - r.left) / r.width) * 280, ((e.clientY - r.top) / r.height) * 280];
+  };
+  const stroke = (a, b) => {
+    pctx.strokeStyle = "#fff";
+    pctx.lineWidth = 20;
+    pctx.lineCap = pctx.lineJoin = "round";
+    pctx.beginPath();
+    pctx.moveTo(a[0], a[1]);
+    pctx.lineTo(b[0], b[1]);
+    pctx.stroke();
+  };
+  const schedule = () => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => { pending = false; classify(); });
+  };
+  pad.addEventListener("pointerdown", (e) => {
+    drawing = true;
+    pad.setPointerCapture(e.pointerId);
+    last = pos(e);
+    stroke(last, last);
+    schedule();
+  });
+  pad.addEventListener("pointermove", (e) => {
+    if (!drawing) return;
+    const p = pos(e);
+    stroke(last, p);
+    last = p;
+    schedule();
+  });
+  const end = () => { drawing = false; };
+  pad.addEventListener("pointerup", end);
+  pad.addEventListener("pointercancel", end);
+  $("clear").addEventListener("click", () => { clearPad(); reset(); });
+
+  // ---- MNIST-style preprocessing ----
+  // Crop to the ink, scale the longer side to 20 px, then place the centre of mass at (14, 14).
+  function preprocess() {
+    const src = pctx.getImageData(0, 0, 280, 280).data;
+    let x0 = 280, y0 = 280, x1 = -1, y1 = -1;
+    for (let y = 0; y < 280; y++)
+      for (let x = 0; x < 280; x++)
+        if (src[(y * 280 + x) * 4] > 20) {
+          if (x < x0) x0 = x; if (x > x1) x1 = x;
+          if (y < y0) y0 = y; if (y > y1) y1 = y;
+        }
+    if (x1 < 0) return null;
+    const w = x1 - x0 + 1, h = y1 - y0 + 1;
+    const s = 20 / Math.max(w, h);
+    const W = Math.max(1, Math.round(w * s)), H = Math.max(1, Math.round(h * s));
+    // Area-average downsampling.
+    const sum = new Float32Array(W * H), cnt = new Float32Array(W * H);
+    for (let y = y0; y <= y1; y++)
+      for (let x = x0; x <= x1; x++) {
+        const tx = Math.min(W - 1, Math.floor((x - x0) * s)), ty = Math.min(H - 1, Math.floor((y - y0) * s));
+        sum[ty * W + tx] += src[(y * 280 + x) * 4] / 255;
+        cnt[ty * W + tx] += 1;
+      }
+    let m = 0, cx = 0, cy = 0;
+    const small = new Float32Array(W * H);
+    for (let i = 0; i < W * H; i++) {
+      small[i] = cnt[i] ? sum[i] / cnt[i] : 0;
+      m += small[i];
+      cx += small[i] * ((i % W) + 0.5);
+      cy += small[i] * (Math.floor(i / W) + 0.5);
+    }
+    const ox = Math.round(14 - cx / m), oy = Math.round(14 - cy / m);
+    const out = new Float32Array(784);
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const X = x + ox, Y = y + oy;
+        if (X >= 0 && Y >= 0 && X < 28 && Y < 28) out[Y * 28 + X] = Math.min(1, small[y * W + x]);
+      }
+    return out;
+  }
+
+  // ---- Rendering helpers ----
+  function paint(canvas, data, side, colorOf) {
+    const ctx = canvas.getContext("2d");
+    const img = ctx.createImageData(side, side);
+    for (let i = 0; i < side * side; i++) {
+      const [r, g, b] = colorOf(data[i]);
+      img.data.set([r, g, b, 255], i * 4);
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+
+  function reset() {
+    $("digit").textContent = "–";
+    $("conf").textContent = "Draw a digit to begin.";
+    bars.forEach((b) => { b.classList.remove("top"); b.querySelector(".fill").style.height = "0%"; b.querySelector(".pct").textContent = ""; });
+    const black = () => [0, 0, 0];
+    for (const c of [$("input"), $("saliency"), ...maps1, ...maps2]) paint(c, new Float32Array(c.width * c.width), c.width, black);
+  }
+
+  function classify() {
+    const img = preprocess();
+    if (!img) return reset();
+    view(wasm.input_ptr(), 784).set(img);
+    const pred = wasm.run();
+    const probs = view(wasm.probs_ptr(), 10);
+    $("digit").textContent = pred;
+    $("conf").textContent = `${(probs[pred] * 100).toFixed(1)}% confident`;
+    bars.forEach((b, d) => {
+      b.classList.toggle("top", d === pred);
+      b.querySelector(".fill").style.height = `${Math.max(probs[d] * 100, 0)}%`;
+      b.querySelector(".pct").textContent = d === pred || probs[d] >= 0.05 ? `${Math.round(probs[d] * 100)}%` : "";
+      b.title = `${d}: ${(probs[d] * 100).toFixed(2)}%`;
+    });
+
+    const black = [0, 0, 0], white = [255, 255, 255];
+    const accent = hex(css("--accent")), pos = hex(css("--pos")), neg = hex(css("--neg"));
+    paint($("input"), img, 28, (v) => mix(black, white, v));
+
+    const sal = view(wasm.saliency_ptr(), 784);
+    let smax = 1e-9;
+    for (const v of sal) smax = Math.max(smax, Math.abs(v));
+    paint($("saliency"), sal.map((v, i) => i), 28, (i) => {
+      const v = sal[i] / smax;
+      const base = mix(black, [70, 70, 70], img[i]); // faint copy of the input for orientation
+      return mix(base, v > 0 ? pos : neg, Math.pow(Math.max(0, Math.abs(v) - 0.12) / 0.88, 0.7));
+    });
+
+    const drawMaps = (maps, ptr, side) => {
+      const all = view(ptr, maps.length * side * side);
+      maps.forEach((c, k) => {
+        const m = all.subarray(k * side * side, (k + 1) * side * side);
+        let mx = 1e-9;
+        for (const v of m) mx = Math.max(mx, v);
+        paint(c, m, side, (v) => mix(black, mix(accent, white, 0.35), Math.sqrt(v / mx)));
+      });
+    };
+    drawMaps(maps1, wasm.conv1_ptr(), 28);
+    drawMaps(maps2, wasm.conv2_ptr(), 14);
+  }
+
+  reset();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", classify);
+})();
+</script>
+</body>
+</html>
